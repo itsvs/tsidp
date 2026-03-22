@@ -601,7 +601,7 @@ func TestServeAuthorize(t *testing.T) {
 			redirectURI:    "https://rp.example.com/callback",
 			clientRedirect: "https://rp.example.com/callback",
 			isTaggedNode:   true,
-			expectCode:     http.StatusBadRequest,
+			expectCode:     http.StatusFound,
 		},
 		{
 			name:           "successfully issues auth code",
@@ -670,49 +670,64 @@ func TestServeAuthorize(t *testing.T) {
 				t.Errorf("expected status code %d, got %d: %s", tt.expectCode, rr.Code, rr.Body.String())
 			}
 
-			if tt.expectCode == http.StatusFound {
-				location := rr.Header().Get("Location")
-				if location == "" {
-					t.Error("expected Location header in redirect response")
-				} else {
-					// Parse the redirect URL to verify it contains a code
-					redirectURL, err := url.Parse(location)
-					if err != nil {
-						t.Errorf("failed to parse redirect URL: %v", err)
-					} else {
-						code := redirectURL.Query().Get("code")
-						if code == "" {
-							t.Error("expected 'code' parameter in redirect URL")
-						}
+			// For any other code, the error check above is the last step
+			if tt.expectCode != http.StatusFound {
+				return
+			}
 
-						// Verify state is preserved if provided
-						if tt.state != "" {
-							returnedState := redirectURL.Query().Get("state")
-							if returnedState != tt.state {
-								t.Errorf("expected state '%s', got '%s'", tt.state, returnedState)
-							}
-						}
+			location := rr.Header().Get("Location")
+			if location == "" {
+				t.Error("expected Location header in redirect response")
+				return
+			}
 
-						// Verify the auth request was stored
-						srv.mu.Lock()
-						ar, ok := srv.code[code]
-						srv.mu.Unlock()
+			// Parse the redirect URL to verify it contains a code
+			redirectURL, err := url.Parse(location)
+			if err != nil {
+				t.Errorf("failed to parse redirect URL: %v", err)
+				return
+			}
 
-						if !ok {
-							t.Error("expected authorization request to be stored")
-						} else {
-							if ar.ClientID != tt.clientID {
-								t.Errorf("expected clientID '%s', got '%s'", tt.clientID, ar.ClientID)
-							}
-							if ar.RedirectURI != tt.redirectURI {
-								t.Errorf("expected redirectURI '%s', got '%s'", tt.redirectURI, ar.RedirectURI)
-							}
-							if ar.Nonce != tt.nonce {
-								t.Errorf("expected nonce '%s', got '%s'", tt.nonce, ar.Nonce)
-							}
-						}
-					}
+			// For a tagged node, we expect an `access_denied` error as the last step
+			if tt.isTaggedNode {
+				errCode := redirectURL.Query().Get("error")
+				if errCode != ecAccessDenied {
+					t.Error("expected 'error' parameter in redirect URL to be 'access_denied'")
 				}
+				return
+			}
+
+			code := redirectURL.Query().Get("code")
+			if code == "" {
+				t.Error("expected 'code' parameter in redirect URL")
+			}
+
+			// Verify state is preserved if provided
+			if tt.state != "" {
+				returnedState := redirectURL.Query().Get("state")
+				if returnedState != tt.state {
+					t.Errorf("expected state '%s', got '%s'", tt.state, returnedState)
+				}
+			}
+
+			// Verify the auth request was stored
+			srv.mu.Lock()
+			ar, ok := srv.code[code]
+			srv.mu.Unlock()
+
+			if !ok {
+				t.Error("expected authorization request to be stored")
+				return
+			}
+
+			if ar.ClientID != tt.clientID {
+				t.Errorf("expected clientID '%s', got '%s'", tt.clientID, ar.ClientID)
+			}
+			if ar.RedirectURI != tt.redirectURI {
+				t.Errorf("expected redirectURI '%s', got '%s'", tt.redirectURI, ar.RedirectURI)
+			}
+			if ar.Nonce != tt.nonce {
+				t.Errorf("expected nonce '%s', got '%s'", tt.nonce, ar.Nonce)
 			}
 		})
 	}
