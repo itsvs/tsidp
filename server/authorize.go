@@ -86,6 +86,11 @@ func (s *IDPServer) serveAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if who.Node.View().IsTagged() {
+		writeHTTPError(w, r, http.StatusBadRequest, ecInvalidRequest, "tagged node doesn't have a user identity", nil)
+		return
+	}
+
 	// Generate and save a code and Auth Request
 	code := rands.HexString(32)
 	ar := &AuthRequest{
