@@ -5,6 +5,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -534,13 +535,11 @@ func TestServeAuthorize(t *testing.T) {
 		redirectURI    string
 		state          string
 		nonce          string
-		setupClient    bool
 		clientRedirect string
 		useFunnel      bool // whether to simulate funnel request
 		mockWhoIsError bool // whether to make WhoIs return an error
-		expectError    bool
+		isTaggedNode   bool // whether to make IsTagged return true
 		expectCode     int
-		expectRedirect bool
 	}{
 		// Security boundary test: funnel rejection
 		{
@@ -549,10 +548,8 @@ func TestServeAuthorize(t *testing.T) {
 			redirectURI:    "https://rp.example.com/callback",
 			state:          "random-state",
 			nonce:          "random-nonce",
-			setupClient:    true,
 			clientRedirect: "https://rp.example.com/callback",
 			useFunnel:      true,
-			expectError:    true,
 			expectCode:     http.StatusUnauthorized,
 		},
 
@@ -562,7 +559,6 @@ func TestServeAuthorize(t *testing.T) {
 			clientID:    "",
 			redirectURI: "https://rp.example.com/callback",
 			useFunnel:   false,
-			expectError: true,
 			expectCode:  http.StatusBadRequest,
 		},
 		{
@@ -570,7 +566,6 @@ func TestServeAuthorize(t *testing.T) {
 			clientID:    "test-client",
 			redirectURI: "",
 			useFunnel:   false,
-			expectError: true,
 			expectCode:  http.StatusBadRequest,
 		},
 
@@ -579,29 +574,60 @@ func TestServeAuthorize(t *testing.T) {
 			name:        "invalid client_id",
 			clientID:    "invalid-client",
 			redirectURI: "https://rp.example.com/callback",
-			setupClient: false,
 			useFunnel:   false,
-			expectError: true,
 			expectCode:  http.StatusBadRequest,
 		},
 		{
 			name:           "redirect_uri mismatch",
 			clientID:       "test-client",
 			redirectURI:    "https://wrong.example.com/callback",
-			setupClient:    true,
 			clientRedirect: "https://rp.example.com/callback",
 			useFunnel:      false,
-			expectError:    true,
 			expectCode:     http.StatusBadRequest,
+		},
+
+		// other cases
+		{
+			name:           "WhoIs error blocks flow",
+			clientID:       "test-client",
+			redirectURI:    "https://rp.example.com/callback",
+			clientRedirect: "https://rp.example.com/callback",
+			mockWhoIsError: true,
+			expectCode:     http.StatusInternalServerError,
+		},
+		{
+			name:           "tagged node is not allowed",
+			clientID:       "test-client",
+			redirectURI:    "https://rp.example.com/callback",
+			clientRedirect: "https://rp.example.com/callback",
+			isTaggedNode:   true,
+			expectCode:     http.StatusBadRequest,
+		},
+		{
+			name:           "successfully issues auth code",
+			clientID:       "test-client",
+			redirectURI:    "https://rp.example.com/callback",
+			clientRedirect: "https://rp.example.com/callback",
+			expectCode:     http.StatusFound,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := setupTestServer(t, nil)
+			whoisResponse := &apitype.WhoIsResponse{
+				Node: &tailcfg.Node{},
+			}
+			var whoisError error = nil
 
-			// For non-funnel tests, we'll test the parameter validation logic
-			// without needing to mock WhoIs, since the validation happens before WhoIs calls
+			if tt.isTaggedNode {
+				whoisResponse.Node.Tags = append(whoisResponse.Node.Tags, "tag:authorize-test-tag")
+			}
+			if tt.mockWhoIsError {
+				whoisResponse = nil
+				whoisError = errors.New("authorize-test-whois-error")
+			}
+
+			srv := setupTestServer(t, setupMockLocalClient(whoisResponse, whoisError))
 
 			// Setup client if needed
 			srv.funnelClients["test-client"] = &FunnelClient{
@@ -640,15 +666,11 @@ func TestServeAuthorize(t *testing.T) {
 			rr := httptest.NewRecorder()
 			srv.serveAuthorize(rr, req)
 
-			if tt.expectError {
-				if rr.Code != tt.expectCode {
-					t.Errorf("expected status code %d, got %d: %s", tt.expectCode, rr.Code, rr.Body.String())
-				}
-			} else if tt.expectRedirect {
-				if rr.Code != http.StatusFound {
-					t.Errorf("expected redirect (302), got %d: %s", rr.Code, rr.Body.String())
-				}
+			if rr.Code != tt.expectCode {
+				t.Errorf("expected status code %d, got %d: %s", tt.expectCode, rr.Code, rr.Body.String())
+			}
 
+			if tt.expectCode == http.StatusFound {
 				location := rr.Header().Get("Location")
 				if location == "" {
 					t.Error("expected Location header in redirect response")
@@ -691,8 +713,6 @@ func TestServeAuthorize(t *testing.T) {
 						}
 					}
 				}
-			} else {
-				t.Errorf("unexpected test case: not expecting error or redirect")
 			}
 		})
 	}
