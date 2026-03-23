@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -12,14 +13,14 @@ import (
 	"testing"
 
 	"gopkg.in/square/go-jose.v2"
-	"tailscale.com/client/local"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
 )
 
 // setupTestServerWithClient creates a test server with an optional LocalClient.
 // If lc is nil, the server will have no LocalClient (original behavior).
 // If lc is provided, it will be used for WhoIs calls during testing.
-func setupTestServer(t *testing.T, lc *local.Client) *IDPServer {
+func setupTestServer(t *testing.T, lc localClient) *IDPServer {
 	t.Helper()
 
 	srv := &IDPServer{
@@ -43,6 +44,19 @@ func setupTestServer(t *testing.T, lc *local.Client) *IDPServer {
 	srv.lazySigner.Set(oidcTestingSigner(t))
 
 	return srv
+}
+
+type mockLocalClient struct {
+	whoisResponse *apitype.WhoIsResponse
+	whoisError    error
+}
+
+func (lc *mockLocalClient) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
+	return lc.whoisResponse, lc.whoisError
+}
+
+func setupMockLocalClient(whoisResponse *apitype.WhoIsResponse, whoisError error) localClient {
+	return &mockLocalClient{whoisResponse, whoisError}
 }
 
 func mustMarshalJSON(t *testing.T, v any) tailcfg.RawMessage {

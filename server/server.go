@@ -39,9 +39,13 @@ import (
 // CtxConn is a key to look up a net.Conn stored in an HTTP request's context.
 type CtxConn struct{}
 
+type localClient interface {
+	WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
+}
+
 // IDPServer handles OIDC identity provider operations
 type IDPServer struct {
-	lc          *local.Client
+	lc          localClient
 	loopbackURL string
 	hostname    string // "foo.bar.ts.net"
 	serverURL   string // "https://foo.bar.ts.net"
@@ -156,6 +160,7 @@ const (
 	ecInvalidRequest   = "invalid_request"
 	ecInvalidClient    = "invalid_client"
 	ecInvalidGrant     = "invalid_grant"
+	ecInvalidScope     = "invalid_scope"
 	ecServerError      = "server_error"
 	ecNotFound         = "not_found"
 	ecUnsupportedGrant = "unsupported_grant_type"
